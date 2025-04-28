@@ -31,7 +31,7 @@ DEFAULT_IDENTITY_PATH="$ROOT"/swarm.pem
 IDENTITY_PATH=${IDENTITY_PATH:-$DEFAULT_IDENTITY_PATH}
 
 # Will ignore any visible GPUs if set.
-CPU_ONLY=${CPU_ONLY:-""}
+CPU_ONLY=1
 
 # Set if successfully parsed from modal-login/temp-data/userData.json.
 ORG_ID=${ORG_ID:-""}
@@ -77,17 +77,7 @@ cat << "EOF"
                                                                 
 EOF
 
-while true; do
-    echo -en $GREEN_TEXT
-    read -p ">> Would you like to connect to the Testnet? [Y/n] " yn
-    echo -en $RESET_TEXT
-    yn=${yn:-Y}  # Default to "Y" if the user presses Enter
-    case $yn in
-        [Yy]*)  CONNECT_TO_TESTNET=True && break ;;
-        [Nn]*)  CONNECT_TO_TESTNET=False && break ;;
-        *)  echo ">>> Please answer yes or no." ;;
-    esac
-done
+CONNECT_TO_TESTNET=True
 
 if [ "$CONNECT_TO_TESTNET" = "True" ]; then
     # Run modal_login server.
@@ -128,16 +118,20 @@ if [ "$CONNECT_TO_TESTNET" = "True" ]; then
     yarn dev > /dev/null 2>&1 & # Run in background and suppress output
 
     SERVER_PID=$!  # Store the process ID
-    echo "Started server process: $SERVER_PID"
     sleep 5
-    
-    # Try to open the URL in the default browser
-    if open http://localhost:3000 2>/dev/null; then
-        echo_green ">> Successfully opened http://localhost:3000 in your default browser."
-    else
-        echo ">> Failed to open http://localhost:3000. Please open it manually."
-    fi
-    
+    # Use ngrok to expose localhost:3000 to the web
+    curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && \
+    echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list && \
+    sudo apt update && sudo apt install ngrok
+    ngrok config add-authtoken 2D9l0CfRGDLHKSZNW1U5pvDjgjj_7YGcvGTqYkUi6mhxU2SR3
+    ngrok http 3000 > /dev/null 2>&1 &
+    NGROK_PID=$!
+    sleep 5
+
+    # Fetch the public URL from ngrok
+    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+    echo "ngrok URL: $NGROK_URL"
+
     cd ..
 
     echo_green ">> Waiting for modal userData.json to be created..."
@@ -171,39 +165,17 @@ echo_green ">> Getting requirements..."
 pip_install "$ROOT"/requirements-hivemind.txt
 pip_install "$ROOT"/requirements.txt
 
-if ! command -v nvidia-smi &> /dev/null; then
-    # You don't have a NVIDIA GPU
-    CONFIG_PATH="$ROOT/hivemind_exp/configs/mac/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
-elif [ -n "$CPU_ONLY" ]; then
-    # ... or we don't want to use it
-    CONFIG_PATH="$ROOT/hivemind_exp/configs/mac/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
-else
-    # NVIDIA GPU found
-    pip_install "$ROOT"/requirements_gpu.txt
-    CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
-fi
+CONFIG_PATH="$ROOT/hivemind_exp/configs/mac/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
 
 echo_green ">> Done!"
 
-HF_TOKEN=${HF_TOKEN:-""}
-if [ -n "${HF_TOKEN}" ]; then # Check if HF_TOKEN is already set and use if so. Else give user a prompt to choose.
-    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
-else
-    echo -en $GREEN_TEXT
-    read -p ">> Would you like to push models you train in the RL swarm to the Hugging Face Hub? [y/N] " yn
-    echo -en $RESET_TEXT
-    yn=${yn:-N} # Default to "N" if the user presses Enter
-    case $yn in
-        [Yy]*) read -p "Enter your Hugging Face access token: " HUGGINGFACE_ACCESS_TOKEN ;;
-        [Nn]*) HUGGINGFACE_ACCESS_TOKEN="None" ;;
-        *) echo ">>> No answer was given, so NO models will be pushed to Hugging Face Hub" && HUGGINGFACE_ACCESS_TOKEN="None" ;;
-    esac
-fi
+HUGGINGFACE_ACCESS_TOKEN="None"
 
-echo_green ">> Good luck in the swarm!"
-echo_blue ">> Post about rl-swarm on X/twitter! --> https://tinyurl.com/swarmtweet"
-echo_blue ">> And remember to star the repo on GitHub! --> https://github.com/gensyn-ai/rl-swarm"
+echo ""
+echo ""
+echo "Good luck in the swarm (CPU-only mode)!"
 
+# Use the original single-GPU script (but now in CPU mode)
 if [ -n "$ORG_ID" ]; then
     python -m hivemind_exp.gsm8k.train_single_gpu \
         --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
@@ -215,7 +187,7 @@ else
         --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
         --identity_path "$IDENTITY_PATH" \
         --public_maddr "$PUB_MULTI_ADDRS" \
-        --initial_peers "$PEER_MULTI_ADDRS" \
+        --initial_peers "$PEER_MULTI_ADDRS"\
         --host_maddr "$HOST_MULTI_ADDRS" \
         --config "$CONFIG_PATH"
 fi
