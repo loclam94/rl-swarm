@@ -86,7 +86,7 @@ class WalletSwarmCoordinator(SwarmCoordinator):
         )
 
 
-# TODO: Uncomment detailed logs once you can disambiguate 500 errors.
+# TODO: Uncomment detailed logs once you can disambiguate 500 errorss.
 class ModalSwarmCoordinator(SwarmCoordinator):
     def __init__(self, web3: Web3, contract_address: str, org_id: str) -> None:
         super().__init__(web3, contract_address)
