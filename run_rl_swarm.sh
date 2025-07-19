@@ -1,6 +1,8 @@
 #!/bin/bash
 
-set -euo pipefail
+# Clear terminal and position cursor at top
+clear
+echo -ne "\033[H"
 
 # General arguments
 ROOT=$PWD
@@ -80,7 +82,7 @@ errnotify() {
 trap cleanup EXIT
 trap errnotify ERR
 
-# Hiển thị banner với gradient màu
+# Display banner with gradient color
 echo -e "\033[38;5;39m"
 cat << "EOF"
     ██████  ██            ███████ ██     ██  █████  ██████  ███    ███
@@ -90,10 +92,10 @@ cat << "EOF"
     ██   ██ ███████       ███████  ███ ███  ██   ██ ██   ██ ██      ██
 EOF
 
-# Hiển thị dòng chữ tùy chỉnh với hiệu ứng blink và gradient màu
-echo -ne "\033[5m"  # Bật hiệu ứng blink trước
+# Display custom text with blink effect and gradient color
+echo -ne "\033[5m"  # Enable blink effect
 echo -ne "\033[38;5;39mB\033[38;5;45my\033[38;5;51m \033[38;5;87mP\033[38;5;129mi\033[38;5;93mz\033[38;5;99m \033[38;5;105m-\033[38;5;111m \033[38;5;117mT\033[38;5;123mG\033[38;5;129m:\033[38;5;135m \033[38;5;141mh\033[38;5;147mt\033[38;5;153mt\033[38;5;159mp\033[38;5;165ms\033[38;5;171m:\033[38;5;177m/\033[38;5;183m/\033[38;5;189mt\033[38;5;195m.\033[38;5;201mm\033[38;5;207me\033[38;5;213m/\033[38;5;219mN\033[38;5;225me\033[38;5;231mx\033[38;5;39mg\033[38;5;45me\033[38;5;51mn\033[38;5;87mg\033[38;5;129me\033[38;5;93mn\033[38;5;99mp\033[38;5;105ml\033[38;5;111mo\033[38;5;117mr\033[38;5;123me"
-echo -e "\033[0m"  # Reset tất cả thuộc tính
+echo -e "\033[0m"  # Reset all attributes
 
 # Create logs directory if it doesn't exist
 mkdir -p "$ROOT/logs"
