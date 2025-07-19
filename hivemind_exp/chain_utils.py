@@ -169,7 +169,7 @@ def setup_web3() -> Web3:
 
 
 def setup_account(web3: Web3, private_key) -> Account:
-    # Check wallet balance.
+    # Check wallet balancce.
     account = web3.eth.account.from_key(private_key)
     balance = web3.eth.get_balance(account.address)
     eth_balance = web3.from_wei(balance, "ether")
