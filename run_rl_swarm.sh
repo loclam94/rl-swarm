@@ -141,7 +141,6 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
         sed -i "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
     fi
 
-
     # Docker image already builds it, no need to again.
     if [ -z "$DOCKER" ]; then
         yarn install --immutable
@@ -154,15 +153,36 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
     echo "Started server process: $SERVER_PID"
     sleep 5
 
-    # Try to open the URL in the default browser
-    if [ -z "$DOCKER" ]; then
-        if open http://localhost:3000 2> /dev/null; then
-            echo_green ">> Successfully opened http://localhost:3000 in your default browser."
-        else
-            echo ">> Failed to open http://localhost:3000. Please open it manually."
+    # Sử dụng localtunnel thay vì mở trực tiếp localhost
+    echo_green ">> Setting up localtunnel to expose the server..."
+    
+    # Cài đặt localtunnel nếu chưa có
+    if ! command -v lt > /dev/null 2>&1; then
+        npm install -g localtunnel
+    fi
+
+    # Khởi chạy localtunnel với subdomain ngẫu nhiên
+    echo "Starting localtunnel (may take a few seconds)..."
+    lt --port 3000 > "$ROOT/logs/localtunnel.log" 2>&1 &
+    TUNNEL_PID=$!
+    sleep 10  # Đợi tunnel được thiết lập
+    
+    # Lấy URL từ log file
+    TUNNEL_URL=$(grep -o 'https://[^ ]*\.localtunnel\.me' "$ROOT/logs/localtunnel.log" | tail -n1)
+    
+    if [ -n "$TUNNEL_URL" ]; then
+        echo_green ">> Public URL for the server: $TUNNEL_URL"
+        
+        if [ -z "$DOCKER" ]; then
+            if command -v xdg-open > /dev/null; then
+                xdg-open "$TUNNEL_URL" >/dev/null 2>&1
+            elif command -v open > /dev/null; then
+                open "$TUNNEL_URL" >/dev/null 2>&1
+            fi
         fi
     else
-        echo_green ">> Please open http://localhost:3000 in your host browser."
+        echo_red ">> Failed to establish localtunnel. Falling back to localhost."
+        TUNNEL_URL="http://localhost:3000"
     fi
 
     cd ..
