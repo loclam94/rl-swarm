@@ -48,6 +48,7 @@ GREEN_TEXT="\033[32m"
 BLUE_TEXT="\033[34m"
 RED_TEXT="\033[31m"
 RESET_TEXT="\033[0m"
+LINK_TEXT="\033]8;;"
 
 echo_green() {
     echo -e "$GREEN_TEXT$1$RESET_TEXT"
@@ -59,6 +60,10 @@ echo_blue() {
 
 echo_red() {
     echo -e "$RED_TEXT$1$RESET_TEXT"
+}
+
+make_clickable() {
+    echo -e "${LINK_TEXT}$1\a$2\033]8;;\a${RESET_TEXT}"
 }
 
 ROOT_DIR="$(cd $(dirname ${BASH_SOURCE[0]}) && pwd)"
@@ -153,7 +158,7 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
     echo "Started server process: $SERVER_PID"
     sleep 5
 
-    # ================== PHẦN THÊM LOCAL TUNNEL ==================
+    # ================== PHẦN LOCAL TUNNEL CÓ THỂ CLICK ==================
     echo_green ">> Setting up localtunnel..."
     
     # Cài đặt localtunnel nếu chưa có
@@ -177,21 +182,26 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
     TUNNEL_URL=$(grep -o 'https://[^ ]*\.loca\.lt' "$ROOT/logs/localtunnel.log" | tail -n1)
 
     if [ -n "$TUNNEL_URL" ]; then
-        echo_green ">> Public URL: $TUNNEL_URL"
+        # Tạo URL có thể click được
+        CLICKABLE_URL=$(make_clickable "$TUNNEL_URL" "$TUNNEL_URL")
+        echo -e "${GREEN_TEXT}>> Public URL: $CLICKABLE_URL${RESET_TEXT}"
         
-        # Mở trình duyệt nếu không phải Docker
+        # Lưu URL vào file để dễ truy cập
+        echo "$TUNNEL_URL" > "$ROOT/localtunnel.url"
+        
+        # Tự động mở trình duyệt nếu không phải Docker
         if [ -z "$DOCKER" ]; then
             if command -v xdg-open > /dev/null; then
-                xdg-open "$TUNNEL_URL"
+                xdg-open "$TUNNEL_URL" >/dev/null 2>&1 &
             elif command -v open > /dev/null; then
-                open "$TUNNEL_URL"
+                open "$TUNNEL_URL" >/dev/null 2>&1 &
             fi
         fi
     else
         echo_red ">> Failed to get tunnel URL. Using localhost instead."
         TUNNEL_URL="http://localhost:3000"
     fi
-    # ================== HẾT PHẦN THÊM LOCAL TUNNEL ==================
+    # ================== HẾT PHẦN LOCAL TUNNEL ==================
 
     cd ..
 
