@@ -2,7 +2,7 @@
 
 This package provides an API and UI for displaying gossip messages and metrics about training.
 
-# Running the web server
+# Running the web serveer
 
 From the rl_swarm directory, use docker-compose to spin up containers for the webserver and OpenTelemetry.
 ```
