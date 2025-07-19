@@ -15,7 +15,6 @@ export ORG_ID
 export HF_HUB_DOWNLOAD_TIMEOUT=120  # 2 minutes
 export SWARM_CONTRACT="0xFaD7C5e93f28257429569B854151A1B8DCD404c2"
 export HUGGINGFACE_ACCESS_TOKEN="None"
-export SKIP_LOCALTUNNEL=${SKIP_LOCALTUNNEL:-""}
 
 # Path to an RSA private key. If this path does not exist, a new key pair will be created.
 # Remove this file if you want a new PeerID.
@@ -103,12 +102,8 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
     # Run modal_login server.
     echo "Please login to create an Ethereum Server Wallet"
     cd modal-login
-    
-    # Fix npm peer dependencies before installation
-    echo "Fixing npm peer dependencies..."
-    npm config set legacy-peer-deps true
-    npm config set fund false
-    
+    # Check if the yarn command exists; if not, install Yarn.
+
     # Node.js + NVM setup
     if ! command -v node > /dev/null 2>&1; then
         echo "Node.js not found. Installing NVM and latest Node.js..."
@@ -118,103 +113,179 @@ if [ "$CONNECT_TO_TESTNET" = true ]; then
         fi
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
         [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-        nvm install --lts
+        nvm install node
     else
         echo "Node.js is already installed: $(node -v)"
     fi
 
     if ! command -v yarn > /dev/null 2>&1; then
-        echo "Yarn not found. Installing Yarn..."
-        npm install -g yarn
+        # Detect Ubuntu (including WSL Ubuntu) and install Yarn accordingly
+        if grep -qi "ubuntu" /etc/os-release 2> /dev/null || uname -r | grep -qi "microsoft"; then
+            echo "Detected Ubuntu or WSL Ubuntu. Installing Yarn via apt..."
+            curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+            echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+            sudo apt update && sudo apt install -y yarn
+        else
+            echo "Yarn not found. Installing Yarn globally with npm (no profile edits)…"
+            # This lands in $NVM_DIR/versions/node/<ver>/bin which is already on PATH
+            npm install -g --silent yarn
+        fi
     fi
 
     ENV_FILE="$ROOT"/modal-login/.env
     if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS version
         sed -i '' "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
     else
+        # Linux version
         sed -i "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
     fi
 
-    # Install dependencies with forced continuation on warnings
-    echo "Installing dependencies..."
-    yarn install --ignore-engines --network-timeout 300000 > "$ROOT/logs/yarn-install.log" 2>&1 || {
-        echo_red ">> Yarn install encountered warnings but continuing anyway"
-    }
+    # Docker image already builds it, no need to again.
+    if [ -z "$DOCKER" ]; then
+        yarn install --immutable
+        echo "Building server"
+        yarn build > "$ROOT/logs/yarn.log" 2>&1
+    fi
+    yarn start >> "$ROOT/logs/yarn.log" 2>&1 & # Run in background and log output
 
-    echo "Building server"
-    yarn build > "$ROOT/logs/yarn-build.log" 2>&1
-    
-    echo "Starting server..."
-    yarn start >> "$ROOT/logs/yarn.log" 2>&1 &
-    SERVER_PID=$!
+    SERVER_PID=$!  # Store the process ID
     echo "Started server process: $SERVER_PID"
     sleep 5
 
-    # Local tunnel implementation with multiple fallbacks
-    if [ -z "$SKIP_LOCALTUNNEL" ]; then
-        echo_green ">> Setting up public URL..."
+    # ================== PHẦN THÊM LOCAL TUNNEL ==================
+    echo_green ">> Setting up localtunnel..."
+    
+    # Cài đặt localtunnel nếu chưa có
+    if ! command -v lt > /dev/null 2>&1; then
+        echo "Installing localtunnel..."
+        npm install -g localtunnel
+    fi
+
+    # Lấy tunnel password
+    echo "Getting tunnel password..."
+    TUNNEL_PASSWORD=$(curl -s https://loca.lt/mytunnelpassword)
+    echo "Tunnel password: $TUNNEL_PASSWORD"
+
+    # Khởi chạy localtunnel
+    echo "Starting localtunnel on port 3000..."
+    lt --port 3000 > "$ROOT/logs/localtunnel.log" 2>&1 &
+    TUNNEL_PID=$!
+    sleep 5  # Đợi tunnel khởi động
+
+    # Lấy URL từ log
+    TUNNEL_URL=$(grep -o 'https://[^ ]*\.loca\.lt' "$ROOT/logs/localtunnel.log" | tail -n1)
+
+    if [ -n "$TUNNEL_URL" ]; then
+        echo_green ">> Public URL: $TUNNEL_URL"
         
-        # Try localtunnel first
-        if command -v lt > /dev/null 2>&1; then
-            echo "Attempting localtunnel..."
-            LT_OUTPUT=$(timeout 15 lt --port 3000 --print-requests 2>&1) && {
-                TUNNEL_URL=$(echo "$LT_OUTPUT" | grep -o 'https://[^ ]*\.localtunnel\.me' | head -n1)
-                [ -n "$TUNNEL_URL" ] && {
-                    echo_green ">> Local tunnel URL: $TUNNEL_URL"
-                    PUBLIC_URL=$TUNNEL_URL
-                }
-            }
-        fi
-
-        # Fallback to ngrok if available
-        if [ -z "$PUBLIC_URL" ] && command -v ngrok > /dev/null 2>&1; then
-            echo "Attempting ngrok..."
-            NGROK_OUTPUT=$(timeout 15 ngrok http 3000 2>&1) && {
-                NGROK_URL=$(echo "$NGROK_OUTPUT" | grep -o 'https://[^ ]*\.ngrok\.io' | head -n1)
-                [ -n "$NGROK_URL" ] && {
-                    echo_green ">> Ngrok URL: $NGROK_URL"
-                    PUBLIC_URL=$NGROK_URL
-                }
-            }
-        fi
-
-        # Final fallback to localhost
-        if [ -z "$PUBLIC_URL" ]; then
-            echo_red ">> Failed to establish public URL. Using localhost."
-            PUBLIC_URL="http://localhost:3000"
+        # Mở trình duyệt nếu không phải Docker
+        if [ -z "$DOCKER" ]; then
+            if command -v xdg-open > /dev/null; then
+                xdg-open "$TUNNEL_URL"
+            elif command -v open > /dev/null; then
+                open "$TUNNEL_URL"
+            fi
         fi
     else
-        echo_blue ">> Skipping public URL setup as requested"
-        PUBLIC_URL="http://localhost:3000"
+        echo_red ">> Failed to get tunnel URL. Using localhost instead."
+        TUNNEL_URL="http://localhost:3000"
     fi
-
-    # Open browser if not in docker
-    if [ -z "$DOCKER" ]; then
-        if command -v xdg-open > /dev/null; then
-            xdg-open "$PUBLIC_URL" >/dev/null 2>&1 &
-        elif command -v open > /dev/null; then
-            open "$PUBLIC_URL" >/dev/null 2>&1 &
-        fi
-    fi
+    # ================== HẾT PHẦN THÊM LOCAL TUNNEL ==================
 
     cd ..
 
-    echo_green ">> Waiting for modal userData.json..."
-    timeout 300 bash -c "while [ ! -f 'modal-login/temp-data/userData.json' ]; do sleep 5; done" || {
-        echo_red ">> Timed out waiting for userData.json"
-        exit 1
-    }
-    
+    echo_green ">> Waiting for modal userData.json to be created..."
+    while [ ! -f "modal-login/temp-data/userData.json" ]; do
+        sleep 5  # Wait for 5 seconds before checking again
+    done
+    echo "Found userData.json. Proceeding..."
+
     ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
     echo "Your ORG_ID is set to: $ORG_ID"
 
-    # Wait for API key activation
-    echo "Waiting for API key activation..."
-    timeout 300 bash -c "while [[ \"$(curl -s http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID)\" != \"activated\" ]]; do sleep 5; done" || {
-        echo_red ">> Timed out waiting for API key activation"
-        exit 1
-    }
-    echo "API key activated!"
+    # Wait until the API key is activated by the client
+    echo "Waiting for API key to become activated..."
+    while true; do
+        STATUS=$(curl -s "http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID")
+        if [[ "$STATUS" == "activated" ]]; then
+            echo "API key is activated! Proceeding..."
+            break
+        else
+            echo "Waiting for API key to be activated..."
+            sleep 5
+        fi
+    done
 fi
 
-# ... (phần còn lại của script giữ nguyên từ phần cài đặt pip trở đi)
+echo_green ">> Getting requirements..."
+pip install --upgrade pip
+
+# echo_green ">> Installing GenRL..."
+pip install gensyn-genrl==0.1.4
+pip install reasoning-gym>=0.1.20 # for reasoning gym env
+pip install trl # for grpo config, will be deprecated soon
+pip install hivemind@git+https://github.com/gensyn-ai/hivemind@639c964a8019de63135a2594663b5bec8e5356dd # We need the latest, 1.1.11 is broken
+
+
+if [ ! -d "$ROOT/configs" ]; then
+    mkdir "$ROOT/configs"
+fi  
+if [ -f "$ROOT/configs/rg-swarm.yaml" ]; then
+    # Use cmp -s for a silent comparison. If different, backup and copy.
+    if ! cmp -s "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"; then
+        if [ -z "$GENSYN_RESET_CONFIG" ]; then
+            echo_green ">> Found differences in rg-swarm.yaml. If you would like to reset to the default, set GENSYN_RESET_CONFIG to a non-empty value."
+        else
+            echo_green ">> Found differences in rg-swarm.yaml. Backing up existing config."
+            mv "$ROOT/configs/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml.bak"
+            cp "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"
+        fi
+    fi
+else
+    # If the config doesn't exist, just copy it.
+    cp "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"
+fi
+
+if [ -n "$DOCKER" ]; then
+    # Make it easier to edit the configs on Linux systems.
+    sudo chmod -R 0777 /home/gensyn/rl_swarm/configs
+fi
+
+echo_green ">> Done!"
+
+HF_TOKEN=${HF_TOKEN:-""}
+if [ -n "${HF_TOKEN}" ]; then # Check if HF_TOKEN is already set and use if so. Else give user a prompt to choose.
+    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
+else
+    echo -en $GREEN_TEXT
+    read -p ">> Would you like to push models you train in the RL swarm to the Hugging Face Hub? [y/N] " yn
+    echo -en $RESET_TEXT
+    yn=${yn:-N} # Default to "N" if the user presses Enter
+    case $yn in
+        [Yy]*) read -p "Enter your Hugging Face access token: " HUGGINGFACE_ACCESS_TOKEN ;;
+        [Nn]*) HUGGINGFACE_ACCESS_TOKEN="None" ;;
+        *) echo ">>> No answer was given, so NO models will be pushed to Hugging Face Hub" && HUGGINGFACE_ACCESS_TOKEN="None" ;;
+    esac
+fi
+
+echo -en $GREEN_TEXT
+read -p ">> Enter the name of the model you want to use in huggingface repo/name format, or press [Enter] to use the default model. " MODEL_NAME
+echo -en $RESET_TEXT
+
+# Only export MODEL_NAME if user provided a non-empty value
+if [ -n "$MODEL_NAME" ]; then
+    export MODEL_NAME
+    echo_green ">> Using model: $MODEL_NAME"
+else
+    echo_green ">> Using default model from config"
+fi
+
+echo_green ">> Good luck in the swarm!"
+echo_blue ">> And remember to star the repo on GitHub! --> https://github.com/gensyn-ai/rl-swarm"
+
+python -m rgym_exp.runner.swarm_launcher \
+    --config-path "$ROOT/rgym_exp/config" \
+    --config-name "rg-swarm.yaml" 
+
+wait  # Keep script running until Ctrl+C
