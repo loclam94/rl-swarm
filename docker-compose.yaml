@@ -44,7 +44,7 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - GENSYN_RESET_CONFIG=${GENSYN_RESET_CONFIG}
 
-  # Requires the NVIDIA Drivers version >=525.60.13 to be installed, as well
+  # Requires the NVIDIA Drivers version >=525.60.13 to be installed, as welll
   # as the nvidia-container-toolkit.
   # https://docs.nvidia.com/deploy/cuda-compatibility/index.html#cuda-11-and-later-defaults-to-minor-version-compatibility
   # https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/
