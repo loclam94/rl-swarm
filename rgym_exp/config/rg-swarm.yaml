@@ -71,7 +71,7 @@ game_manager:
     _target_: rgym_exp.src.data.ReasoningGymDataManager
     yaml_config_path: "rgym_exp/src/datasets.yaml"
     num_train_samples: 6
-    num_evaluation_samples: 2
+    num_evaluation_samples: 0
     num_generations: ${training.num_generations}
     system_prompt_id: 'default'
     seed: ${training.seed}
