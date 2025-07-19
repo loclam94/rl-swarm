@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# ==================== PHẦN CẤU HÌNH GỐC GIỮ NGUYÊN ====================
 set -euo pipefail
 
 # General arguments
@@ -81,15 +80,6 @@ errnotify() {
 trap cleanup EXIT
 trap errnotify ERR
 
-# ==================== PHẦN SỬA LỖI CHÍNH ====================
-# Thay thế dòng gọi ./start_swarm.sh bằng lệnh gốc từ file initial
-LAUNCH_SWARM() {
-    python -m rgym_exp.runner.swarm_launcher \
-        --config-path "$ROOT/rgym_exp/config" \
-        --config-name "rg-swarm.yaml"
-}
-
-# ==================== PHẦN CHẠY CHÍNH GIỮ NGUYÊN ====================
 echo -e "\033[38;5;224m"
 cat << "EOF"
     ██████  ██            ███████ ██     ██  █████  ██████  ███    ███
@@ -104,14 +94,162 @@ EOF
 # Create logs directory if it doesn't exist
 mkdir -p "$ROOT/logs"
 
-[Phần còn lại của script giữ nguyên...]
+if [ "$CONNECT_TO_TESTNET" = true ]; then
+    # Run modal_login server.
+    echo "Please login to create an Ethereum Server Wallet"
+    cd modal-login
+    
+    # Node.js + NVM setup
+    if ! command -v node > /dev/null 2>&1; then
+        echo "Node.js not found. Installing NVM and latest Node.js..."
+        export NVM_DIR="$HOME/.nvm"
+        if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        fi
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        nvm install node
+    else
+        echo "Node.js is already installed: $(node -v)"
+    fi
 
-# ==================== THAY ĐỔI CUỐI CÙNG ====================
-# Thay thế đoạn cuối cùng thành:
+    if ! command -v yarn > /dev/null 2>&1; then
+        echo "Yarn not found. Installing Yarn..."
+        npm install -g yarn
+    fi
+
+    # Docker image already builds it, no need to again.
+    if [ -z "$DOCKER" ]; then
+        yarn install --immutable
+        echo "Building server"
+        yarn build > "$ROOT/logs/yarn.log" 2>&1
+    fi
+    
+    yarn start >> "$ROOT/logs/yarn.log" 2>&1 &
+    SERVER_PID=$!
+    echo "Started server process: $SERVER_PID"
+    sleep 5
+
+    # Local tunnel implementation
+    echo ">> Setting up localtunnel..."
+    
+    if ! command -v lt > /dev/null 2>&1; then
+        npm install -g localtunnel
+    fi
+
+    echo "Getting tunnel password..."
+    TUNNEL_PASSWORD=$(curl -s https://loca.lt/mytunnelpassword)
+    echo "Tunnel password: $TUNNEL_PASSWORD"
+
+    lt --port 3000 > "$ROOT/logs/localtunnel.log" 2>&1 &
+    TUNNEL_PID=$!
+    sleep 5
+
+    TUNNEL_URL=$(grep -o 'https://[^ ]*\.loca\.lt' "$ROOT/logs/localtunnel.log" | tail -n1)
+
+    if [ -n "$TUNNEL_URL" ]; then
+        echo -e "${GREEN_TEXT}>> Public URL: $TUNNEL_URL${RESET_TEXT}"
+        echo "$TUNNEL_URL" > "$ROOT/localtunnel.url"
+        
+        if [ -z "$DOCKER" ]; then
+            if command -v xdg-open > /dev/null; then
+                xdg-open "$TUNNEL_URL" >/dev/null 2>&1 &
+            elif command -v open > /dev/null; then
+                open "$TUNNEL_URL" >/dev/null 2>&1 &
+            fi
+        fi
+    else
+        echo_red ">> Failed to get tunnel URL. Using localhost instead."
+        TUNNEL_URL="http://localhost:3000"
+    fi
+
+    cd ..
+
+    echo_green ">> Waiting for modal userData.json to be created..."
+    while [ ! -f "modal-login/temp-data/userData.json" ]; do
+        sleep 5
+    done
+    echo "Found userData.json. Proceeding..."
+
+    ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
+    echo "Your ORG_ID is set to: $ORG_ID"
+
+    echo "Waiting for API key to become activated..."
+    while true; do
+        STATUS=$(curl -s "http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID")
+        if [[ "$STATUS" == "activated" ]]; then
+            echo "API key is activated! Proceeding..."
+            break
+        else
+            echo "Waiting for API key to be activated..."
+            sleep 5
+        fi
+    done
+fi
+
+echo_green ">> Getting requirements..."
+pip install --upgrade pip
+
+pip install gensyn-genrl==0.1.4
+pip install reasoning-gym>=0.1.20
+pip install trl
+pip install hivemind@git+https://github.com/gensyn-ai/hivemind@639c964a8019de63135a2594663b5bec8e5356dd
+
+if [ ! -d "$ROOT/configs" ]; then
+    mkdir "$ROOT/configs"
+fi  
+
+if [ -f "$ROOT/configs/rg-swarm.yaml" ]; then
+    if ! cmp -s "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"; then
+        if [ -z "$GENSYN_RESET_CONFIG" ]; then
+            echo_green ">> Found differences in rg-swarm.yaml. If you would like to reset to the default, set GENSYN_RESET_CONFIG to a non-empty value."
+        else
+            echo_green ">> Found differences in rg-swarm.yaml. Backing up existing config."
+            mv "$ROOT/configs/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml.bak"
+            cp "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"
+        fi
+    fi
+else
+    cp "$ROOT/rgym_exp/config/rg-swarm.yaml" "$ROOT/configs/rg-swarm.yaml"
+fi
+
+if [ -n "$DOCKER" ]; then
+    sudo chmod -R 0777 /home/gensyn/rl_swarm/configs
+fi
+
+echo_green ">> Done!"
+
+HF_TOKEN=${HF_TOKEN:-""}
+if [ -n "${HF_TOKEN}" ]; then
+    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
+else
+    echo -en $GREEN_TEXT
+    read -p ">> Would you like to push models you train in the RL swarm to the Hugging Face Hub? [y/N] " yn
+    echo -en $RESET_TEXT
+    case $yn in
+        [Yy]*) read -p "Enter your Hugging Face access token: " HUGGINGFACE_ACCESS_TOKEN ;;
+        [Nn]*) HUGGINGFACE_ACCESS_TOKEN="None" ;;
+        *) HUGGINGFACE_ACCESS_TOKEN="None" ;;
+    esac
+fi
+
+echo -en $GREEN_TEXT
+read -p ">> Enter the name of the model you want to use in huggingface repo/name format, or press [Enter] to use the default model. " MODEL_NAME
+echo -en $RESET_TEXT
+
+if [ -n "$MODEL_NAME" ]; then
+    export MODEL_NAME
+    echo_green ">> Using model: $MODEL_NAME"
+else
+    echo_green ">> Using default model from config"
+fi
+
 echo_green ">> Good luck in the swarm!"
 echo_blue ">> And remember to star the repo on GitHub! --> https://github.com/gensyn-ai/rl-swarm"
 
-# Gọi hàm launch thay vì ./start_swarm.sh
-LAUNCH_SWARM
+# Launch the swarm
+python -m rgym_exp.runner.swarm_launcher \
+    --config-path "$ROOT/rgym_exp/config" \
+    --config-name "rg-swarm.yaml"
 
 wait
